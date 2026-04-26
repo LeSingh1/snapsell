@@ -1,15 +1,15 @@
 import type { ScanResult, ComparableListing, DiagnosticsData } from "@/context/ScanContext";
 
-const EWASTE_FACTS = [
-  "Americans throw away 9.4 million tons of electronics every year.",
-  "Only 17.4% of e-waste produced globally is properly recycled.",
-  "One metric ton of circuit boards contains 40–800 times more gold than one metric ton of ore.",
-  "E-waste is the fastest growing waste stream in the world.",
-  "A single smartphone contains over 60 different elements from the periodic table.",
-  "Recycling 1 million laptops saves energy equivalent to electricity used by 3,500 US homes in a year.",
+const RESALE_FACTS = [
+  "Clear photos and specific model details usually help used listings sell faster.",
+  "Condition notes build buyer trust when they mention visible wear honestly.",
+  "Comparable sold listings are more useful than active asking prices for resale estimates.",
+  "Including size, color, storage, or generation can make a listing easier to find.",
+  "A reusable item often has more value when the listing explains what is included.",
+  "Pricing near the middle of comparable sales can balance speed and final value.",
 ];
 
-export const getRandomFact = () => EWASTE_FACTS[Math.floor(Math.random() * EWASTE_FACTS.length)];
+export const getRandomFact = () => RESALE_FACTS[Math.floor(Math.random() * RESALE_FACTS.length)];
 
 const MOCK_COMPARABLES: ComparableListing[] = [
   { title: "Apple iPhone 12 64GB Black Unlocked - Good Condition", soldPrice: 115, condition: "Used - Good", soldDate: "Mar 28, 2026", variant: "64GB · Black", imageUrl: "", ebayUrl: "https://www.ebay.com" },
@@ -24,6 +24,10 @@ export function simulateAIDiagnostics(): DiagnosticsData {
     brand: "Apple",
     modelNumber: "A2172",
     yearOfPurchase: 2021,
+    itemCategory: "Electronics",
+    itemCondition: "Good",
+    conditionNotes: "Light wear visible, no major cracks or missing parts.",
+    overallConfidence: 86,
     powersOn: null,
     screenCondition: "",
     aiConfidence: {
@@ -31,6 +35,8 @@ export function simulateAIDiagnostics(): DiagnosticsData {
       brand: true,
       modelNumber: true,
       yearOfPurchase: true,
+      itemCategory: true,
+      itemCondition: true,
       powersOn: false,
       screenCondition: false,
     },
