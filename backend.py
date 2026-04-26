@@ -154,29 +154,42 @@ async def image_proxy(url: str):
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 IDENTIFY_PROMPT = """
-You are an expert electronics identifier. Study every photo carefully. Accuracy matters more than confidence — it is better to say "likely" than to guess "certain" and be wrong.
+You are an expert resale item identifier. Study every photo carefully and combine evidence across all images. The product can be electronics, shoes, clothing, collectibles, home goods, toys, instruments, books/media, jewelry/watches, sports gear, or another sellable item.
+
+Your job is to pre-fill a resale details form as much as possible. Use visible evidence first: logos, labels, model text, tags, packaging, ports/buttons, materials, size markings, color, edition, generation, damage, wear, and included accessories. If a field is a strong visual inference, fill it and mark it "likely". Only use null when the photo truly does not show enough evidence.
 
 Return ONLY valid JSON — no markdown, no explanation:
 {
-  "device_name":      {"value": null, "confidence": "certain"},
-  "brand":            {"value": null, "confidence": "certain"},
-  "model":            {"value": null, "confidence": "unknown"},
-  "year":             {"value": null, "confidence": "unknown"},
-  "powers_on":        {"value": null, "confidence": "unknown"},
-  "screen_condition": {"value": null, "confidence": "unknown"}
+  "item_name":      {"value": null, "confidence": "certain"},
+  "brand":          {"value": null, "confidence": "certain"},
+  "model_variant":  {"value": null, "confidence": "likely"},
+  "year_or_age":    {"value": null, "confidence": "likely"},
+  "category":       {"value": null, "confidence": "certain"},
+  "condition":      {"value": null, "confidence": "likely"},
+  "condition_notes":{"value": null, "confidence": "likely"},
+  "powers_on":      {"value": null, "confidence": "unknown"},
+  "screen_condition":{"value": null, "confidence": "unknown"}
 }
 
 Field rules:
-- device_name: exact product name including screen size if you can determine it. IMPORTANT — screen size cues:
+- item_name: concise marketplace-ready name. Include the exact product line when visible or strongly inferable, e.g. "Sony WH-1000XM4 Headphones", "Nike Air Force 1 Low", "Xbox Series X", "Levi's Denim Jacket". Avoid vague names like "Electronic Device" unless nothing else is possible.
+- brand: manufacturer or designer. If an item is clearly generic/unbranded, use "Unbranded" with "likely" confidence.
+- model_variant: useful resale variant details. For electronics, include model/generation/storage/screen size/color when visible or inferable. For clothes/shoes, include size, gender, color, material, style, or edition. For collectibles, include edition, set, year, or character. Keep it short.
+- year_or_age: best estimate as a four-digit year if possible. For non-electronics, use manufacture/release year only if visible or strongly inferable; otherwise null.
+- category: MUST be exactly one of:
+  "Electronics", "Clothing & Apparel", "Footwear", "Collectibles & Art", "Sports & Outdoors", "Home & Garden", "Toys & Games", "Musical Instruments", "Books & Media", "Jewelry & Watches", "Other"
+- condition: MUST be exactly one of "Like New", "Good", "Fair", "Poor".
+  * Like New: no visible wear or damage.
+  * Good: light normal wear, fully usable.
+  * Fair: obvious wear, scratches, stains, dents, missing minor pieces, but still usable.
+  * Poor: cracked, broken, heavily damaged, not working, or major missing parts.
+- condition_notes: one short sentence explaining visible condition evidence.
+- Electronics cues:
   * MacBook Pro 14 vs 16: the 14-inch has a noticeably smaller chassis. The 16-inch is significantly wider and taller. Without a clear size reference object in the frame, use "likely" not "certain" for screen size.
   * iPhone: count camera lenses, look for Dynamic Island vs notch vs no notch, check button layout.
   * iPad: look at bezel width, home button vs Face ID, Smart Connector placement.
-  * If you truly cannot determine screen size, omit it from the name and mark confidence "likely".
-- brand: manufacturer name — look for logo on lid/chassis/bezel. Mark "certain" only if logo is clearly visible.
-- model: model number from any visible label, sticker, or engraving. If not visible, infer from visual cues and mark "likely". Do not guess blindly.
-- year: estimate from design generation, port types (USB-A vs USB-C, MagSafe 1/2/3, Mini DisplayPort etc), keyboard layout, and notch/island/bezel style. Provide best estimate with "likely" if inferring.
-- powers_on: "Yes" if screen shows any activity or indicator light is on. "No" if clearly off or broken. "unknown" if ambiguous.
-- screen_condition: "Flawless", "Minor Scratches", "Cracked", or "Screen is off/broken". Look carefully across all photos.
+  * powers_on: "Yes" if screen shows activity or indicator light is on. "No" if clearly off or broken. "unknown" if ambiguous or not electronic.
+  * screen_condition: "Flawless", "Minor Scratches", "Cracked", "Screen is off/broken", or "unknown".
 
 Confidence rules (be honest — this affects how much the user trusts the result):
 - "certain": you can clearly see direct evidence in the photo
@@ -259,14 +272,14 @@ def carbon_saving(device_name: str) -> int:
 @app.post("/api/identify")
 async def identify(files: list[UploadFile] = File(...)):
     """Upload device photos → returns DiagnosticsData."""
-    photo_bytes = [await f.read() for f in files[:4]]
+    photo_bytes = [await f.read() for f in files[:8]]
     blocks = [make_image_block(b) for b in photo_bytes]
     blocks.append({"type": "text", "text": IDENTIFY_PROMPT})
 
     client = anthropic.Anthropic()
     resp = client.messages.create(
         model="claude-sonnet-4-5",
-        max_tokens=600,
+        max_tokens=900,
         messages=[{"role": "user", "content": blocks}],
     )
     raw = extract_json(resp.content[0].text)
@@ -274,42 +287,102 @@ async def identify(files: list[UploadFile] = File(...)):
     def val(field):
         return raw.get(field, {}).get("value") or ""
 
+    def first_val(*fields):
+        for field in fields:
+            value = val(field)
+            if value:
+                return value
+        return ""
+
     # Weight confidence: certain=1.0, likely=0.6, unknown=0.0
     CONF_WEIGHT = {"certain": 1.0, "likely": 0.6, "unknown": 0.0}
 
-    def conf_weight(field):
-        return CONF_WEIGHT.get(raw.get(field, {}).get("confidence", "unknown"), 0.0)
+    def conf_weight(*fields):
+        return max((CONF_WEIGHT.get(raw.get(field, {}).get("confidence", "unknown"), 0.0) for field in fields), default=0.0)
 
-    def is_confident(field):
+    def is_confident(*fields):
         # "unknown" triggers NEEDS YOUR INPUT — certain and likely are both fine
-        return raw.get(field, {}).get("confidence") in ("certain", "likely")
+        return any(raw.get(field, {}).get("confidence") in ("certain", "likely") for field in fields)
 
     powers_on_raw = val("powers_on")
     powers_on = True if str(powers_on_raw).lower() == "yes" else (
         False if str(powers_on_raw).lower() == "no" else None
     )
 
+    allowed_categories = {
+        "Electronics", "Clothing & Apparel", "Footwear", "Collectibles & Art",
+        "Sports & Outdoors", "Home & Garden", "Toys & Games", "Musical Instruments",
+        "Books & Media", "Jewelry & Watches", "Other",
+    }
+
+    def normalize_category(value: str) -> str:
+        cleaned = str(value or "").strip()
+        if cleaned in allowed_categories:
+            return cleaned
+        lower = cleaned.lower()
+        if any(k in lower for k in ("phone", "laptop", "computer", "console", "camera", "tablet", "headphone", "electronic")):
+            return "Electronics"
+        if any(k in lower for k in ("shoe", "sneaker", "boot", "footwear")):
+            return "Footwear"
+        if any(k in lower for k in ("shirt", "jacket", "pants", "clothing", "apparel", "dress", "hoodie")):
+            return "Clothing & Apparel"
+        if any(k in lower for k in ("watch", "jewelry", "ring", "necklace")):
+            return "Jewelry & Watches"
+        return "Other" if cleaned else ""
+
+    def normalize_condition(value: str) -> str:
+        lower = str(value or "").strip().lower()
+        if lower in ("like new", "new", "excellent", "mint", "open box"):
+            return "Like New"
+        if lower in ("good", "very good", "used - good", "minor wear"):
+            return "Good"
+        if lower in ("fair", "acceptable", "used - acceptable", "worn"):
+            return "Fair"
+        if lower in ("poor", "broken", "for parts", "damaged", "not working"):
+            return "Poor"
+        return ""
+
     # Overall confidence = weighted average of all fields, capped at 96%
-    weights = [conf_weight(f) for f in ("device_name", "brand", "model", "year", "powers_on", "screen_condition")]
+    weights = [
+        conf_weight("item_name", "device_name"),
+        conf_weight("brand"),
+        conf_weight("model_variant", "model"),
+        conf_weight("year_or_age", "year"),
+        conf_weight("category"),
+        conf_weight("condition"),
+    ]
     overall_confidence = round(min(96, (sum(weights) / len(weights)) * 100))
 
-    # Only keep model if it looks like a real model ID (short, no long sentences)
-    model_raw = val("model") or ""
-    model_clean = model_raw if (len(model_raw) < 30 and "(" not in model_raw and len(model_raw.split()) <= 3) else ""
+    # Keep useful resale variants but avoid full explanatory sentences.
+    model_raw = first_val("model_variant", "model")
+    model_clean = model_raw if (len(model_raw) <= 80 and len(model_raw.split()) <= 10) else ""
+    year_value = first_val("year_or_age", "year")
+    try:
+        year_value = int(year_value)
+    except (TypeError, ValueError):
+        year_value = datetime.now().year
+
+    item_category = normalize_category(val("category"))
+    item_condition = normalize_condition(val("condition"))
 
     return {
-        "productName": val("device_name") or "",
+        "productName": first_val("item_name", "device_name"),
         "brand": val("brand") or "",
         "modelNumber": model_clean,
-        "yearOfPurchase": raw.get("year", {}).get("value") or datetime.now().year,
+        "yearOfPurchase": year_value,
+        "itemCategory": item_category,
+        "itemCondition": item_condition,
+        "conditionNotes": val("condition_notes") or "",
         "powersOn": powers_on,
         "screenCondition": val("screen_condition") or "",
         "overallConfidence": overall_confidence,
         "aiConfidence": {
-            "productName": is_confident("device_name"),
+            "productName": is_confident("item_name", "device_name"),
             "brand": is_confident("brand"),
-            "modelNumber": is_confident("model"),
-            "yearOfPurchase": is_confident("year"),
+            "modelNumber": is_confident("model_variant", "model"),
+            "yearOfPurchase": is_confident("year_or_age", "year"),
+            "itemCategory": bool(item_category) and is_confident("category"),
+            "itemCondition": bool(item_condition) and is_confident("condition"),
             "powersOn": is_confident("powers_on"),
             "screenCondition": is_confident("screen_condition"),
         },
