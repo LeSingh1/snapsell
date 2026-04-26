@@ -41,6 +41,10 @@ export interface DiagnosticsData {
   yearOfPurchase: number;
   itemCondition: string;
   itemCategory: string;
+  conditionNotes?: string;
+  overallConfidence?: number;
+  powersOn?: boolean | null;
+  screenCondition?: string;
   aiConfidence: Record<string, boolean>;
 }
 
